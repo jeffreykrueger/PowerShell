@@ -1,0 +1,108 @@
+#Set variable for your environment
+$sitecode = 'YOUR SITE CODE GOES HERE'
+$Server = 'Your Primary SCCM Server NAME goes here'
+
+#Setup parameters for Collections to be created
+
+#Prefix variables will be appended during the loop to make the acutal parameters for the new collections
+$PrefixQueryExpr = "select SMS_R_SYSTEM.ResourceID,SMS_R_SYSTEM.ResourceType,SMS_R_SYSTEM.Name,SMS_R_SYSTEM.SMSUniqueIdentifier,SMS_R_SYSTEM.ResourceDomainORWorkgroup,SMS_R_SYSTEM.Client from SMS_R_System where SMS_R_System.SMSUniqueIdentifier like"
+$PrefixCollectionName = "Enterprise Random Client Collection - Guids ending with"
+
+#Fill in the limiting collection ID below
+$LimitingCollectionID = 'SMS00001'
+
+#Make an empty array of the collection IDs which will be created for use later
+$CreatedCollectionNames = @()
+
+#Functions to set the random time and convert to ConfigMgr date
+function Get-RandomTime
+{
+    $hour = Get-Random -Maximum 12 -Minimum 1
+    $minute = Get-Random -Maximum 59 -Minimum 0
+    $AM_PM = 'AM'
+    switch($hour)
+    {
+        1{$AM_PM = 'AM'}
+        2{$AM_PM = 'AM'}
+        3{$AM_PM = 'AM'}
+        4{$AM_PM = 'AM'}
+        5{$AM_PM = 'AM'}
+        6{$AM_PM = 'AM'}
+        7{$AM_PM = 'PM'}
+        8{$AM_PM = 'PM'}
+        9{$AM_PM = 'PM'}
+        10{$AM_PM = 'PM'}
+        11{$AM_PM = 'PM'}
+        12{$AM_PM = 'AM'}
+    }
+    return "01/09/2014 {0}`:{1:#00} {2}" -f $hour, $minute, $AM_PM
+}
+
+Function Convert-NormalDateToConfigMgrDate {
+   [CmdletBinding()]
+   param (
+       [parameter(Mandatory=$true, ValueFromPipeline=$true)]
+       [string]$starttime
+   )
+   return [System.Management.ManagementDateTimeconverter]::ToDMTFDateTime($starttime)
+}
+
+#Make an array of hex numbers 0-f
+    
+    #First make a range of decimal numbers
+    $a = 0..15
+    
+    #Make an empty array to hold our hex numbers
+    $HexRangeArray = @()
+    
+    #Convert decimal in hexidecimal and add to the array
+    foreach ($b in $a) { $HexRangeArray += '{0:x}' -f $b }
+
+
+
+#Loop through each hex number in the array and create the collections
+Foreach($HexNumber in $HexRangeArray)
+    {
+    #Build unique paramters first ensuring the variables are clean
+    $CollectionName = $null 
+    $QueryExpr = $null
+    $CollectionName = $PrefixCollectionName + " $HexNumber"
+    $QueryExpr = $PrefixQueryExpr + ' "%' + $HexNumber + '"'
+
+    #Add name to array for later use
+    $CreatedCollectionNames += $CollectionName 
+
+    #Create collection
+    New-CMDeviceCollection -Name $CollectionName -LimitingCollectionId $LimitingCollectionID
+
+    #Create the collection query rule
+    Add-CMDeviceCollectionQueryMembershipRule -CollectionName $CollectionName -QueryExpression $QueryExpr -RuleName $HexNumber
+    }
+
+#Set the collections to refresh weekly at a random time
+Foreach ($CollectionName in $CreatedCollectionNames)
+    {
+    $Collection = $null
+    $Collection = gwmi -ComputerName $Server -Namespace "ROOT\SMS\Site_$($SiteCode)" -Query "SELECT * FROM SMS_Collection WHERE Name = '$CollectionName'"
+
+   
+    "Updating [{0}]..." -f $Collection.Name
+    [datetime]$StartTime = Get-RandomTime
+    "Setting refresh time to [{0}]" -f $StartTime
+    
+    #Builds the string for WMI class to create an instance on
+    $WMIClassString = "\\" + $Server + "\root\SMS\Site_" + $sitecode + ":SMS_ST_RecurInterval"
+
+    $ScheduledToken = ([WMIClass]"$WMIClassString").CreateInstance()
+    
+    "Setting refresh recurrence to [{0} days]" -f $RefreshDays
+
+    $ScheduledToken.DaySpan = $RefreshDays
+    $ScheduledToken.StartTime =  (Convert-NormalDateToConfigMgrDate $StartTime)
+
+
+    $Collection.RefreshType = 2
+
+    $Collection.RefreshSchedule = $ScheduledToken
+    $Collection.Put() | Out-Null
+    }
